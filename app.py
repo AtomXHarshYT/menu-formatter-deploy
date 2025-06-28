@@ -18,7 +18,7 @@ TESSERACT_PATH = "/usr/bin/tesseract"  # Update if needed
 POPPLER_PATH = "/usr/bin"              # Render's Poppler location (auto works on Render)
 # -------------------------------------------------------
 
-pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+# Render auto-installs tesseract at /usr/bin/tesseract, so no need to configure
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
