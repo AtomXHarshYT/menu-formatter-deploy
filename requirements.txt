@@ -1,8 +1,9 @@
-pytesseract
-pdf2image
-Pillow
+streamlit
 google-generativeai
+pdf2image
+pytesseract
+Pillow
 pandas
-opencv-python
-numpy
+opencv-python-headless
 PyPDF2
+openpyxl
