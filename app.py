@@ -1,36 +1,26 @@
 import os
-import pytesseract
-from pdf2image import convert_from_path
-from PIL import Image
-import google.generativeai as genai
-import pandas as pd
+import re
+import json
+import tempfile
 import logging
-import json, re
-import cv2
+import pandas as pd
 import numpy as np
-from tkinter import Tk, filedialog, messagebox
+import cv2
+import pytesseract
+from PIL import Image
+from pdf2image import convert_from_bytes
+from PyPDF2 import PdfReader
+import google.generativeai as genai
+import streamlit as st
 
-# -------------------- CONFIGURATION --------------------
-TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-POPPLER_PATH = r'C:\poppler-24.08.0\Library\bin'
-GENAI_API_KEY = 'AIzaSyBQKUZnZrH4guk0DWaaPqtly-oRixR7nCc'  # Replace with your Gemini API Key
+# -------------------- Configuration --------------------
+TESSERACT_PATH = "/usr/bin/tesseract"  # Update if needed
+POPPLER_PATH = "/usr/bin"              # Render's Poppler location (auto works on Render)
 # -------------------------------------------------------
 
-# Setup
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
-genai.configure(api_key=GENAI_API_KEY)
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-API_KEY_FILE = os.path.expanduser("~/.gemini_api_key.txt")
-
-if os.path.exists(API_KEY_FILE):
-    with open(API_KEY_FILE, "r") as f:
-        GENAI_API_KEY = f.read().strip()
-else:
-    from tkinter.simpledialog import askstring
-    GENAI_API_KEY = askstring("Gemini API Key", "Enter your Gemini API key:")
-    with open(API_KEY_FILE, "w") as f:
-        f.write(GENAI_API_KEY)
 
 def preprocess_image(pil_img):
     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2GRAY)
@@ -38,50 +28,51 @@ def preprocess_image(pil_img):
     return Image.fromarray(bin_img)
 
 
-def extract_text(file_path):
-    ext = os.path.splitext(file_path)[1].lower()
+def extract_text(file_bytes, ext):
     all_text = ""
     if ext == '.pdf':
-        images = convert_from_path(file_path, poppler_path=POPPLER_PATH)
+        images = convert_from_bytes(file_bytes, poppler_path=POPPLER_PATH)
         for idx, img in enumerate(images):
-            logging.info(f"OCR on page {idx + 1}...")
+            st.info(f"OCR on page {idx + 1}")
             clean_img = preprocess_image(img)
             text = pytesseract.image_to_string(clean_img, config='--psm 4')
             all_text += text + "\n"
     elif ext in ['.jpg', '.jpeg', '.png']:
-        img = Image.open(file_path)
+        img = Image.open(tempfile.NamedTemporaryFile(delete=False))
+        img.write(file_bytes)
+        img = Image.open(img.name)
         clean_img = preprocess_image(img)
         all_text = pytesseract.image_to_string(clean_img, config='--psm 4')
     elif ext in ['.xlsx', '.csv']:
-        df = pd.read_excel(file_path) if ext == '.xlsx' else pd.read_csv(file_path)
+        df = pd.read_excel(file_bytes) if ext == '.xlsx' else pd.read_csv(file_bytes)
         all_text = "\n".join(df.astype(str).fillna('').agg(' | '.join, axis=1))
     else:
-        logging.error("Unsupported file type.")
-    with open("ocr_output.txt", "w", encoding="utf-8") as f:
-        f.write(all_text)
+        st.error("Unsupported file type.")
     return all_text.strip()
 
 
-def extract_raw_text(file_path):
-    ext = os.path.splitext(file_path)[1].lower()
+def extract_raw_text(file_bytes, ext):
     if ext in ['.xlsx', '.csv']:
-        df = pd.read_excel(file_path) if ext == '.xlsx' else pd.read_csv(file_path)
+        df = pd.read_excel(file_bytes) if ext == '.xlsx' else pd.read_csv(file_bytes)
         return "\n".join(df.astype(str).fillna('').agg(' | '.join, axis=1))
     elif ext == '.pdf':
         try:
-            from PyPDF2 import PdfReader
-            reader = PdfReader(file_path)
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception as e:
-            logging.warning("PDF might be image-based. Consider using OCR mode.")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(file_bytes)
+                tmp.seek(0)
+                reader = PdfReader(tmp.name)
+                return "\n".join(page.extract_text() or "" for page in reader.pages)
+        except:
+            st.warning("PDF might be image-based. Consider using OCR mode.")
             return ""
     elif ext in ['.jpg', '.jpeg', '.png']:
-        return ""  # No direct text from images
+        return ""
     else:
         return ""
 
 
-def ask_gemini(prompt_text):
+def ask_gemini(api_key, prompt_text):
+    genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-1.5-flash")
     prompt = f'''
 You are a professional menu parser. Convert the following text into a JSON array where each row is flat and independent.
@@ -106,104 +97,74 @@ Menu text:
     return response.text
 
 
-def parse_json_response(text, output_file):
-    try:
-        with open("raw_gemini_output.txt", "w", encoding="utf-8") as f:
-            f.write(text)
+def parse_json_response(text):
+    text = text.strip()
+    text = re.sub(r'```+', '', text)
+    text = re.sub(r',\s*(\}|\])', r'\1', text)
+    text = text.replace('\\n', ' ').replace('\\', '')
 
-        text = text.strip()
-        text = re.sub(r'```+', '', text)
-        text = re.sub(r',\s*(\}|\])', r'\1', text)
-        text = text.replace('\\n', ' ').replace('\\', '')
+    json_block = re.search(r'\[\s*{.*', text, re.DOTALL)
+    if not json_block:
+        raise ValueError("No JSON array found.")
+    cleaned = json_block.group()
 
-        json_block = re.search(r'\[\s*{.*', text, re.DOTALL)
-        if not json_block:
-            raise ValueError("No JSON array found.")
-        cleaned = json_block.group()
+    open_brackets = cleaned.count("[")
+    close_brackets = cleaned.count("]")
+    open_braces = cleaned.count("{")
+    close_braces = cleaned.count("}")
 
-        open_brackets = cleaned.count("[")
-        close_brackets = cleaned.count("]")
-        open_braces = cleaned.count("{")
-        close_braces = cleaned.count("}")
+    cleaned += "}" * (open_braces - close_braces)
+    cleaned += "]" * (open_brackets - close_braces)
 
-        cleaned += "}" * (open_braces - close_braces)
-        cleaned += "]" * (open_brackets - close_braces)
+    parsed = json.loads(cleaned)
 
-        with open("debug_cleaned_json.txt", "w", encoding="utf-8") as f:
-            f.write(cleaned)
+    symbols_to_remove = r"[{}\[\]\"']"
+    for row in parsed:
+        for key, value in row.items():
+            if isinstance(value, str):
+                row[key] = re.sub(symbols_to_remove, '', value).strip()
 
-        print("\n✅ Gemini response saved:")
-        print("   → raw_gemini_output.txt")
-        print("   → debug_cleaned_json.txt")
-        input("🟡 Clean the JSON if needed and press ENTER to continue...")
-
-        try:
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            logging.error(f"🔴 JSON parsing failed: {e}")
-            logging.error("Check debug_cleaned_json.txt and try again.")
-            return
-
-        # Clean unwanted characters from each string field
-        symbols_to_remove = r"[{}\[\]\"']"
-        for row in parsed:
-            for key, value in row.items():
-                if isinstance(value, str):
-                    row[key] = re.sub(symbols_to_remove, '', value).strip()
-
-        df = pd.DataFrame(parsed)
-        df.to_excel(output_file, index=False)
-        logging.info(f"✅ Final structured data saved to: {output_file}")
-
-    except Exception as e:
-        logging.error("❌ Unexpected error during parsing or saving.")
-        logging.error(str(e))
+    return pd.DataFrame(parsed)
 
 
-def main():
-    logging.info("🔥 Starting Menu Formatter with Method Selection")
+# -------------------- Streamlit UI --------------------
 
-    root = Tk()
-    root.withdraw()
+st.set_page_config(page_title="Menu Formatter", layout="centered")
 
-    input_path = filedialog.askopenfilename(
-        title="Select menu file (PDF/Image/Excel/CSV)",
-        filetypes=[("All Supported", "*.pdf *.jpg *.jpeg *.png *.xlsx *.csv")]
-    )
-    if not input_path:
-        logging.warning("No file selected. Exiting.")
-        return
+st.title("📋 AI Menu Formatter")
+st.caption("Upload your restaurant menu (PDF/Image/Excel), choose a method, and get a clean structured Excel menu!")
 
-    method = messagebox.askyesno(
-        "Select Processing Method",
-        "Yes = Use OCR (Tesseract for clean scan)\nNo = Directly send file to Gemini"
-    )
+api_key = st.text_input("🔑 Enter your Gemini API Key", type="password")
+file = st.file_uploader("📂 Upload Menu File", type=["pdf", "jpg", "jpeg", "png", "xlsx", "csv"])
+method = st.radio("⚙️ Select Method", ["OCR using Tesseract", "Direct Text (PDF/Excel Only)"])
 
-    save_path = filedialog.asksaveasfilename(
-        defaultextension=".xlsx",
-        title="Save formatted menu as",
-        filetypes=[("Excel File", "*.xlsx")]
-    )
-    if not save_path:
-        logging.warning("No save path selected. Exiting.")
-        return
-
-    if method:
-        logging.info("🔍 Method: Full OCR using Tesseract")
-        extracted = extract_text(input_path)
+if st.button("Process Menu"):
+    if not api_key:
+        st.warning("Please enter your Gemini API key.")
+    elif not file:
+        st.warning("Please upload a menu file.")
     else:
-        logging.info("⚡ Method: Direct to Gemini without OCR")
-        extracted = extract_raw_text(input_path)
+        ext = os.path.splitext(file.name)[1].lower()
+        bytes_data = file.read()
+        extracted_text = extract_text(bytes_data, ext) if "OCR" in method else extract_raw_text(bytes_data, ext)
 
-    if not extracted:
-        logging.error("Text extraction failed or returned empty.")
-        return
+        if not extracted_text:
+            st.error("No text extracted.")
+        else:
+            st.text_area("📝 Extracted Text", extracted_text, height=200)
+            st.info("Sending to Gemini...")
+            gemini_output = ask_gemini(api_key, extracted_text)
 
-    gemini_response = ask_gemini(extracted)
-    parse_json_response(gemini_response, save_path)
+            try:
+                df = parse_json_response(gemini_output)
+                st.success("✅ Menu parsed successfully!")
+                st.dataframe(df)
 
-    messagebox.showinfo("Done", f"Formatted menu saved to:\n{save_path}")
-
-
-if __name__ == "__main__":
-    main()
+                st.download_button(
+                    label="📥 Download Excel",
+                    data=df.to_excel(index=False, engine='openpyxl'),
+                    file_name="formatted_menu.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            except Exception as e:
+                st.error(f"JSON parsing failed: {e}")
