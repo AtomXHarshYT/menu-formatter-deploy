@@ -1,5 +1,4 @@
 # app.py
-
 import streamlit as st
 import os
 import tempfile
@@ -12,6 +11,7 @@ import json, re
 import cv2
 import numpy as np
 from PyPDF2 import PdfReader
+from pdf2image import convert_from_path, convert_from_bytes
 
 # Setup session state for API key
 if "api_key" not in st.session_state:
@@ -45,7 +45,7 @@ def preprocess_image(pil_img):
 def extract_text(file_bytes, ext):
     all_text = ""
     if ext == ".pdf":
-        images = convert_from_bytes(file_bytes)
+        images = convert_from_path(file_bytes)
         for idx, img in enumerate(images):
             clean_img = preprocess_image(img)
             text = pytesseract.image_to_string(clean_img, config="--psm 4")
