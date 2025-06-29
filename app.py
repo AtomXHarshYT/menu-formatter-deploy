@@ -9,6 +9,7 @@ import json, re
 import cv2
 import numpy as np
 from tkinter import Tk, filedialog, messagebox
+from PyPDF2 import PdfReader
 
 # -------------------- CONFIGURATION --------------------
 TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
@@ -56,11 +57,13 @@ def extract_raw_text(file_path):
         return "\n".join(df.astype(str).fillna('').agg(' | '.join, axis=1))
     elif ext == '.pdf':
         try:
-            from PyPDF2 import PdfReader
             reader = PdfReader(file_path)
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
+            raw_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            if not raw_text.strip():
+                logging.warning("PDF might be image-based. Consider using OCR mode.")
+            return raw_text
         except Exception as e:
-            logging.warning("PDF might be image-based. Consider using OCR mode.")
+            logging.warning("Failed to extract from PDF: %s", str(e))
             return ""
     elif ext in ['.jpg', '.jpeg', '.png']:
         return ""  # No direct text from images
