@@ -17,6 +17,14 @@ from pdf2image import convert_from_path, convert_from_bytes
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
 
+# Extra states for manual JSON review
+if "gemini_response" not in st.session_state:
+    st.session_state.gemini_response = ""
+if "output_path" not in st.session_state:
+    st.session_state.output_path = ""
+if "output_ready" not in st.session_state:
+    st.session_state.output_ready = False
+
 # Streamlit UI
 st.set_page_config(page_title="Menu Formatter", layout="centered")
 st.title("📋 Restaurant Menu Formatter")
@@ -113,20 +121,26 @@ def parse_json_response(text, output_path):
     cleaned += "}" * (open_braces - close_braces)
     cleaned += "]" * (open_brackets - close_brackets)
 
-    try:
-        parsed = json.loads(cleaned)
-        symbols_to_remove = r"[{}\[\]\"']"
-        for row in parsed:
-            for key, value in row.items():
-                if isinstance(value, str):
-                    row[key] = re.sub(symbols_to_remove, "", value).strip()
-        df = pd.DataFrame(parsed)
-        df.to_excel(output_path, index=False)
-        st.success("✅ Menu formatted and saved successfully.")
-        st.download_button("📥 Download Excel", data=open(output_path, "rb").read(), file_name=output_name)
-    except Exception as e:
-        st.error("❌ JSON Parsing Error")
-        st.error(str(e))
+    st.text_area("🧾 Gemini JSON (Edit manually before confirming)", cleaned, height=300, key="json_editor")
+
+    if st.button("✅ Continue to Convert"):
+        try:
+            parsed = json.loads(st.session_state.json_editor)
+            symbols_to_remove = r"[{}\\[\\]\"']"
+            for row in parsed:
+                for key, value in row.items():
+                    if isinstance(value, str):
+                        row[key] = re.sub(symbols_to_remove, "", value).strip()
+            df = pd.DataFrame(parsed)
+            df.to_excel(output_path, index=False)
+            st.success("✅ Menu formatted and saved successfully.")
+            st.download_button("📥 Download Excel", data=open(output_path, "rb").read(), file_name=output_name)
+        except json.JSONDecodeError as e:
+            st.error("❌ JSON Parsing Error")
+            st.error(str(e))
+        except Exception as e:
+            st.error("❌ Unexpected Error")
+            st.error(str(e))
 
 # Process
 if st.button("🚀 Run Formatter"):
@@ -141,6 +155,6 @@ if st.button("🚀 Run Formatter"):
         if not extracted:
             st.error("❌ Failed to extract any text.")
         else:
-            gemini_response = ask_gemini(extracted)
-            output_path = os.path.join(tempfile.gettempdir(), output_name)
-            parse_json_response(gemini_response, output_path)
+            st.session_state.gemini_response = ask_gemini(extracted)
+            st.session_state.output_path = os.path.join(tempfile.gettempdir(), output_name)
+            parse_json_response(st.session_state.gemini_response, st.session_state.output_path)
