@@ -121,7 +121,13 @@ def parse_json_response(text, output_path):
     cleaned += "}" * (open_braces - close_braces)
     cleaned += "]" * (open_brackets - close_brackets)
 
-    st.text_area("🧾 Gemini JSON (Edit manually before confirming)", cleaned, height=300, key="json_editor")
+    try:
+        parsed_preview = json.loads(cleaned)
+        formatted_preview = json.dumps(parsed_preview, indent=2, ensure_ascii=False)
+    except Exception:
+        formatted_preview = cleaned  # fallback if JSON is still malformed
+
+    st.text_area("🧾 Gemini JSON (Edit manually before confirming)", formatted_preview, height=400, key="json_editor")
 
     if st.button("✅ Continue to Convert"):
         try:
