@@ -81,7 +81,7 @@ def extract_raw_text(file_bytes, ext):
 def ask_gemini(prompt_text):
     model = genai.GenerativeModel("gemini-1.5-flash")
     prompt = f"""
-You are a professional menu parser. Convert the following text into a JSON array where each row is flat and independent.
+You are a professional menu parser. First, clean the following text by removing all special characters like #, @, $, %, &, *, (, ), also Convert Double Quatation into Single ( This -> " to this -> ') etc. — only keep letters, numbers, spaces, and punctuation that is useful (like commas, periods, hyphens in prices or names)
 
 Each item must include:
 - "Category"
